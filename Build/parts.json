@@ -1,0 +1,4 @@
+{
+  "WebBuild.data": ["WebBuild.data.part0001", "WebBuild.data.part0002", "WebBuild.data.part0003", "WebBuild.data.part0004", "WebBuild.data.part0005", "WebBuild.data.part0006", "WebBuild.data.part0007", "WebBuild.data.part0008", "WebBuild.data.part0009", "WebBuild.data.part0010", "WebBuild.data.part0011", "WebBuild.data.part0012", "WebBuild.data.part0013", "WebBuild.data.part0014", "WebBuild.data.part0015", "WebBuild.data.part0016", "WebBuild.data.part0017", "WebBuild.data.part0018"],
+  "WebBuild.wasm": ["WebBuild.wasm.part0001", "WebBuild.wasm.part0002", "WebBuild.wasm.part0003"]
+}

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>DEEEER Simulator</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #0d0f12; overflow: hidden; }
+    #unity-canvas { width: 100%; height: 100%; display: block; background: #000; outline: none; }
+    #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 14px; font: 15px/1.4 system-ui, sans-serif; color: #e8e8e8; background: #0d0f12; }
+    #overlay h1 { margin: 0; font-size: 22px; letter-spacing: .5px; }
+    #bar { width: min(420px, 80vw); height: 10px; border-radius: 5px; background: #2a2e35; overflow: hidden; }
+    #fill { width: 0; height: 100%; background: #f2a541; transition: width .15s; }
+    #status { opacity: .8; min-height: 1.4em; text-align: center; max-width: 80vw; }
+    #fs { position: fixed; right: 12px; bottom: 12px; padding: 6px 10px; border: 0; border-radius: 6px;
+      background: rgba(0,0,0,.55); color: #fff; font: 13px system-ui, sans-serif; cursor: pointer; display: none; }
+    #err { color: #ff8c8c; }
+  </style>
+</head>
+<body>
+  <canvas id="unity-canvas" tabindex="-1"></canvas>
+  <div id="overlay">
+    <h1>DEEEER Simulator</h1>
+    <div id="bar"><div id="fill"></div></div>
+    <div id="status">Loading…</div>
+  </div>
+  <button id="fs" title="Fullscreen">⛶ Fullscreen</button>
+  <script>
+  (async function () {
+    var buildUrl = "Build";
+    var files = {
+      loader: "WebBuild.loader.js",
+      data: "WebBuild.data",
+      framework: "WebBuild.framework.js",
+      code: "WebBuild.wasm"
+    };
+    var canvas = document.getElementById("unity-canvas");
+    var fill = document.getElementById("fill");
+    var status = document.getElementById("status");
+    var overlay = document.getElementById("overlay");
+    function setStatus(t, isErr) { status.innerHTML = isErr ? '<span id="err">' + t + '</span>' : t; }
+
+    // Large files are split into .partNNNN chunks by the editor (Port/Build WebGL);
+    // Build/parts.json lists them. Without a manifest the files are loaded directly.
+    var parts = {};
+    try {
+      var r = await fetch(buildUrl + "/parts.json", { cache: "no-cache" });
+      if (r.ok) parts = await r.json();
+    } catch (e) { }
+
+    var totalChunks = 0, doneBytes = 0, totalBytes = 0;
+    Object.keys(parts).forEach(function (k) { totalChunks += parts[k].length; });
+
+    async function fetchJoined(name, mime) {
+      var list = parts[name];
+      if (!list) return buildUrl + "/" + name;
+      var blobs = [];
+      for (var i = 0; i < list.length; i++) {
+        var url = buildUrl + "/" + list[i];
+        var res = await fetch(url);
+        if (!res.ok) throw new Error("HTTP " + res.status + " for " + url);
+        var reader = res.body.getReader(), chunks = [];
+        for (;;) {
+          var step = await reader.read();
+          if (step.done) break;
+          chunks.push(step.value);
+          doneBytes += step.value.length;
+          var est = Math.max(totalBytes, doneBytes);
+          fill.style.width = (60 * doneBytes / est).toFixed(1) + "%";
+          setStatus("Downloading " + (doneBytes / 1048576).toFixed(0) + " MB…");
+        }
+        blobs.push(new Blob(chunks));
+      }
+      return URL.createObjectURL(new Blob(blobs, { type: mime }));
+    }
+
+    try {
+      // rough size estimate for the progress bar: 19 MB per chunk
+      totalBytes = totalChunks * 19922944;
+      var dataUrl = await fetchJoined(files.data, "application/octet-stream");
+      var codeUrl = await fetchJoined(files.code, "application/wasm");
+      var frameworkUrl = await fetchJoined(files.framework, "application/javascript");
+    } catch (e) {
+      setStatus("Download failed: " + e.message, true);
+      return;
+    }
+
+    var config = {
+      dataUrl: dataUrl,
+      frameworkUrl: frameworkUrl,
+      codeUrl: codeUrl,
+      streamingAssetsUrl: "StreamingAssets",
+      companyName: "Gibier Games",
+      productName: "DEEEER Simulator",
+      productVersion: "6.4.0",
+      devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2)
+    };
+
+    var script = document.createElement("script");
+    script.src = buildUrl + "/" + files.loader;
+    script.onload = function () {
+      createUnityInstance(canvas, config, function (p) {
+        var base = totalChunks ? 60 : 0;
+        fill.style.width = (base + (100 - base) * p).toFixed(1) + "%";
+        setStatus(p < 1 ? "Starting… " + Math.round(p * 100) + "%" : "Ready");
+      }).then(function (instance) {
+        window.unityInstance = instance;
+        overlay.style.display = "none";
+        var fs = document.getElementById("fs");
+        fs.style.display = "block";
+        fs.onclick = function () { instance.SetFullscreen(1); };
+        canvas.focus();
+      }).catch(function (msg) { setStatus(String(msg), true); });
+    };
+    script.onerror = function () { setStatus("Could not load " + files.loader, true); };
+    document.body.appendChild(script);
+
+    // keep keyboard input in the game, stop page scrolling on game keys
+    window.addEventListener("keydown", function (e) {
+      if ([" ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab"].indexOf(e.key) >= 0) e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener("click", function () { canvas.focus(); });
+    canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  })();
+  </script>
+</body>
+</html>
