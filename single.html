@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>DEEEER Simulator</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #0d0f12; overflow: hidden; }
+    #unity-canvas { width: 100%; height: 100%; display: block; background: #000; outline: none; }
+    #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 14px; font: 15px/1.4 system-ui, sans-serif; color: #e8e8e8; background: #0d0f12; }
+    #overlay h1 { margin: 0; font-size: 22px; letter-spacing: .5px; }
+    #bar { width: min(420px, 80vw); height: 10px; border-radius: 5px; background: #2a2e35; overflow: hidden; }
+    #fill { width: 0%; height: 100%; background: #f2a541; transition: width .15s; }
+    #status { opacity: .8; min-height: 1.4em; text-align: center; max-width: 80vw; }
+    #fs { position: fixed; right: 12px; bottom: 12px; padding: 6px 10px; border: 0; border-radius: 6px;
+      background: rgba(0,0,0,.55); color: #fff; font: 13px system-ui, sans-serif; cursor: pointer; display: none; }
+    #err { color: #ff8c8c; }
+  </style>
+</head>
+<body>
+  <canvas id="unity-canvas" tabindex="-1"></canvas>
+  <div id="overlay">
+    <h1>DEEEER Simulator</h1>
+    <div id="bar"><div id="fill"></div></div>
+    <div id="status">Loading…</div>
+  </div>
+  <button id="fs" title="Fullscreen">⛶ Fullscreen</button>
+
+  <script>
+  (async function () {
+    const repoBase = "https://cdn.jsdelivr.net/gh/AlexBoops/DEEEER-Simulator-Port@main";
+    const buildUrl = `${repoBase}/Build`;
+    
+    const files = {
+      loader: "WebBuild.loader.js",
+      data: "WebBuild.data",
+      framework: "WebBuild.framework.js",
+      code: "WebBuild.wasm"
+    };
+
+    const canvas = document.getElementById("unity-canvas");
+    const fill = document.getElementById("fill");
+    const status = document.getElementById("status");
+    const overlay = document.getElementById("overlay");
+
+    function setStatus(t, isErr) { 
+      status.innerHTML = isErr ? '<span id="err">' + t + '</span>' : t; 
+    }
+
+    // Fetch chunk with 5-second backoff retries for CDN rate limiting
+    async function fetchWithRetry(url, retries = 6, delayMs = 5000) {
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+          const res = await fetch(url);
+          const contentType = res.headers.get("content-type") || "";
+
+          if (res.ok && !contentType.includes("text/html")) {
+            const buf = await res.arrayBuffer();
+            if (buf.byteLength > 0) return buf;
+          }
+          console.warn(`[jsDelivr Attempt ${attempt}/${retries}] HTTP ${res ? res.status : 'Error'} for ${url}`);
+        } catch (err) {
+          console.warn(`[jsDelivr Attempt ${attempt}/${retries}] Network error for ${url}`);
+        }
+
+        if (attempt < retries) {
+          setStatus(`Retrying connection in 5s… (${attempt}/${retries})`);
+          await new Promise(r => setTimeout(r, delayMs));
+        }
+      }
+      throw new Error(`Failed to download ${url} after ${retries} attempts.`);
+    }
+
+    // Load parts.json manifest directly from jsDelivr
+    let parts = {};
+    try {
+      const r = await fetch(`${buildUrl}/parts.json`, { cache: "no-cache" });
+      if (r.ok) parts = await r.json();
+    } catch (e) {
+      console.warn("Could not load parts.json manifest, falling back to direct files.");
+    }
+
+    let totalChunks = 0, doneBytes = 0, totalBytes = 0;
+    Object.keys(parts).forEach(k => { totalChunks += parts[k].length; });
+    totalBytes = totalChunks ? totalChunks * 19922944 : 50000000;
+
+    async function fetchJoined(name, mime) {
+      const list = parts[name];
+      if (!list || list.length === 0) {
+        const buf = await fetchWithRetry(`${buildUrl}/${name}`);
+        return URL.createObjectURL(new Blob([buf], { type: mime }));
+      }
+
+      const chunks = [];
+      let combinedLength = 0;
+
+      for (let i = 0; i < list.length; i++) {
+        const chunkFileName = list[i];
+        const url = `${buildUrl}/${chunkFileName}`;
+        setStatus(`Downloading ${name} (${i + 1}/${list.length})…`);
+
+        const buf = await fetchWithRetry(url);
+        chunks.push(buf);
+        combinedLength += buf.byteLength;
+
+        doneBytes += buf.byteLength;
+        const pct = Math.min(60, (60 * doneBytes / totalBytes));
+        fill.style.width = pct.toFixed(1) + "%";
+      }
+
+      const combined = new Uint8Array(combinedLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(new Uint8Array(chunk), offset);
+        offset += chunk.byteLength;
+      }
+
+      return URL.createObjectURL(new Blob([combined], { type: mime }));
+    }
+
+    try {
+      setStatus("Initializing downloader…");
+      const dataUrl = await fetchJoined(files.data, "application/octet-stream");
+      const codeUrl = await fetchJoined(files.code, "application/wasm");
+      const frameworkUrl = await fetchJoined(files.framework, "application/javascript");
+
+      const config = {
+        dataUrl: dataUrl,
+        frameworkUrl: frameworkUrl,
+        codeUrl: codeUrl,
+        streamingAssetsUrl: `${repoBase}/StreamingAssets`,
+        companyName: "Gibier Games",
+        productName: "DEEEER Simulator",
+        productVersion: "6.4.0",
+        matchWebGLToCanvasSize: true,
+        devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2)
+      };
+
+      const script = document.createElement("script");
+      script.src = `${buildUrl}/${files.loader}`;
+      script.crossOrigin = "anonymous";
+      script.onload = function () {
+        createUnityInstance(canvas, config, function (p) {
+          const base = totalChunks ? 60 : 0;
+          fill.style.width = (base + (100 - base) * p).toFixed(1) + "%";
+          setStatus(p < 1 ? "Starting… " + Math.round(p * 100) + "%" : "Ready");
+        }).then(function (instance) {
+          window.unityInstance = instance;
+          overlay.style.display = "none";
+          const fs = document.getElementById("fs");
+          fs.style.display = "block";
+          fs.onclick = function () { instance.SetFullscreen(1); };
+          canvas.focus();
+        }).catch(function (msg) { setStatus(String(msg), true); });
+      };
+
+      script.onerror = function () { 
+        setStatus("Could not load loader script from " + buildUrl + "/" + files.loader, true); 
+      };
+
+      document.body.appendChild(script);
+
+    } catch (e) {
+      setStatus("Download failed: " + e.message, true);
+    }
+
+    window.addEventListener("keydown", function (e) {
+      if ([" ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab"].indexOf(e.key) >= 0) e.preventDefault();
+    }, { passive: false });
+
+    canvas.addEventListener("click", function () { canvas.focus(); });
+    canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  })();
+  </script>
+</body>
+</html>
